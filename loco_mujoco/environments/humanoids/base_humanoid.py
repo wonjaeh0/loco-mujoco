@@ -17,7 +17,7 @@ class BaseHumanoid(LocoEnv):
 
     """
 
-    def __init__(self, use_muscles=False, use_box_feet=True, disable_arms=True, alpha_box_feet=0.5, **kwargs):
+    def __init__(self, use_muscles=False, use_box_feet=True, disable_arms=True, alpha_box_feet=0.5, use_exo=False, **kwargs):
         """
         Constructor.
 
@@ -30,18 +30,25 @@ class BaseHumanoid(LocoEnv):
 
         """
         if use_muscles:
-            xml_path = (Path(__file__).resolve().parent.parent / "data" / "humanoid" /
+            if use_exo:
+                xml_path = (Path(__file__).resolve().parent.parent / "data" / "humanoid" /
+                        "humanoid_muscleexo.xml").as_posix()
+            else:
+                xml_path = (Path(__file__).resolve().parent.parent / "data" / "humanoid" /
                         "humanoid_muscle.xml").as_posix()
         else:
+            if use_exo:
+                raise NotImplementedError
             xml_path = (Path(__file__).resolve().parent.parent / "data" / "humanoid" /
                         "humanoid_torque.xml").as_posix()
 
-        action_spec = self._get_action_specification(use_muscles)
+        action_spec = self._get_action_specification(use_muscles,use_exo=use_exo)
 
         observation_spec = self._get_observation_specification()
 
         # --- Modify the xml, the action_spec, and the observation_spec if needed ---
         self._use_muscles = use_muscles
+        self._use_exo = use_exo
         self._use_box_feet = use_box_feet
         self._disable_arms = disable_arms
         joints_to_remove, motors_to_remove, equ_constr_to_remove, collision_groups = self._get_xml_modifications()
@@ -391,7 +398,7 @@ class BaseHumanoid(LocoEnv):
         return observation_spec
 
     @staticmethod
-    def _get_action_specification(use_muscles):
+    def _get_action_specification(use_muscles, use_exo=False):
         """
         Getter for the action space specification.
 
@@ -420,6 +427,9 @@ class BaseHumanoid(LocoEnv):
                            "tib_post_l", "flex_dig_l", "flex_hal_l", "tib_ant_l", "per_brev_l", "per_long_l",
                            "per_tert_l", "ext_dig_l", "ext_hal_l", "ercspn_r", "ercspn_l", "intobl_r",
                            "intobl_l", "extobl_r", "extobl_l"]
+            if use_exo:
+                action_exo = ["mot_hip_flexion_r","mot_hip_flexion_l"]
+                action_spec = action_exo+action_spec
         else:
             action_spec = ["mot_lumbar_ext", "mot_lumbar_bend", "mot_lumbar_rot", "mot_shoulder_flex_r",
                            "mot_shoulder_add_r", "mot_shoulder_rot_r", "mot_elbow_flex_r", "mot_pro_sup_r",

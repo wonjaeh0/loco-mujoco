@@ -3,6 +3,7 @@ from .talos import Talos
 from .unitreeH1 import UnitreeH1
 from .unitreeG1 import UnitreeG1
 from .humanoids import HumanoidTorque, HumanoidMuscle, HumanoidTorque4Ages, HumanoidMuscle4Ages
+from .humanoidsexo import HumanoidMuscleExo
 
 
 # register environments in mushroom
@@ -14,6 +15,7 @@ HumanoidTorque.register()
 HumanoidMuscle.register()
 HumanoidTorque4Ages.register()
 HumanoidMuscle4Ages.register()
+HumanoidMuscleExo.register()
 
 
 from gymnasium import register
