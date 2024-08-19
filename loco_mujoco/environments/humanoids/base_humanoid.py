@@ -10,6 +10,8 @@ from mushroom_rl.utils.mujoco import *
 import loco_mujoco
 from loco_mujoco.environments import LocoEnv
 
+from loco_mujoco.utils.torch_utils import quat_from_euler_xyz,get_euler_xyz,quat_conjugate,quat_mul,quat_diff_rad
+import torch
 
 class BaseHumanoid(LocoEnv):
     """
@@ -66,6 +68,8 @@ class BaseHumanoid(LocoEnv):
 
             if self._disable_arms:
                 xml_handle = self._reorient_arms(xml_handle)
+        
+        self._rewardtype = 'deepmimic'
 
         super().__init__(xml_handle, action_spec, observation_spec, collision_groups, **kwargs)
 
@@ -147,9 +151,11 @@ class BaseHumanoid(LocoEnv):
 
         """
 
+        heightidx = self._get_idx("q_pelvis_ty")
+
         pelvis_euler = self._get_from_obs(obs, ["q_pelvis_tilt", "q_pelvis_list", "q_pelvis_rotation"])
 
-        pelvis_height_condition = (obs[0] < -0.46) or (obs[0] > 0.1)
+        pelvis_height_condition = (obs[heightidx] < -0.46) or (obs[heightidx] > 0.1)
         pelvis_tilt_condition = (pelvis_euler[0] < (-np.pi / 4.5)) or (pelvis_euler[0] > (np.pi / 12))
         pelvis_list_condition = (pelvis_euler[1] < -np.pi / 12) or (pelvis_euler[1] > np.pi / 8)
         pelvis_rotation_condition = (pelvis_euler[2] < (-np.pi / 9)) or (pelvis_euler[2] > (np.pi / 9))
@@ -394,8 +400,17 @@ class BaseHumanoid(LocoEnv):
             ("dq_pro_sup_l", "pro_sup_l", ObservationType.JOINT_VEL),
             ("dq_wrist_flex_l", "wrist_flex_l", ObservationType.JOINT_VEL),
             ("dq_wrist_dev_l", "wrist_dev_l", ObservationType.JOINT_VEL)]
+        
+        observation_spec_add = [
+            ("p_talus_l", "talus_l", ObservationType.BODY_POS),
+            ("p_talus_r", "talus_r", ObservationType.BODY_POS),
+            # ("p_humerus_l", "humerus_l", ObservationType.BODY_POS),
+            # ("p_humerus_r", "humerus_r", ObservationType.BODY_POS)
+            ("p_hand_l", "hand_l", ObservationType.BODY_POS),
+            ("p_hand_r", "hand_r", ObservationType.BODY_POS)
+        ]
 
-        return observation_spec
+        return observation_spec + observation_spec_add
 
     @staticmethod
     def _get_action_specification(use_muscles, use_exo=False):
@@ -504,3 +519,195 @@ class BaseHumanoid(LocoEnv):
         h.quat = [1.0, -0.6, 0.0, 0.0]
 
         return xml_handle
+    
+    def _get_observation_space(self):
+        """
+        Returns a tuple of the lows and highs (np.array) of the observation space.
+
+        """
+
+        sim_low, sim_high = (self.info.observation_space.low,
+                             self.info.observation_space.high)
+        
+        grf_low, grf_high = (-np.ones((self._get_grf_size(),)) * np.inf,
+                                 np.ones((self._get_grf_size(),)) * np.inf)
+        
+        time_low, time_high = (-np.ones((1,)) * np.inf,
+                                 np.ones((1,)) * np.inf)
+
+        if self._use_foot_forces:
+            grf_low, grf_high = (-np.ones((self._get_grf_size(),)) * np.inf,
+                                 np.ones((self._get_grf_size(),)) * np.inf)
+            return (np.concatenate([sim_low, grf_low, time_low]),
+                    np.concatenate([sim_high, grf_high, time_high]))
+        else:
+            return (np.concatenate([sim_low, time_low]),
+                    np.concatenate([sim_high, time_high]))
+        
+
+    # def _preprocess_action(self, action):
+    #     return np.zeros_like(super()._preprocess_action(action))
+    
+    def _create_observation(self, obs):
+        """
+        Creates a full vector of observations.
+
+        Args:
+            obs (np.array): Observation vector to be modified or extended;
+
+        Returns:
+            New observation vector (np.array);
+
+        """
+
+        # import pdb;pdb.set_trace()
+
+        if self._use_foot_forces:
+            obs = np.concatenate([obs,
+                                  self.mean_grf.mean / 1000,
+                                #   [self._step*self._timestep]
+                                  [((self._randidx+self._step)%self._refsize)*self.dt]
+                                  ]).flatten()
+        else:
+            obs = np.concatenate([obs,
+                                #   [self._step*self._timestep]
+                                  [((self._randidx+self._step)%self._refsize)*self.dt]
+                                  ]).flatten()
+
+        return obs
+    
+    def step(self, action):
+        obs, reward, absorbing, info = super().step(action)
+        return obs, reward[0], absorbing, reward[1]
+    
+
+    def reward(self, state, action, next_state, absorbing):
+
+        # balljoint = ["q_pelvis_tilt",
+        #              "q_hip_flexion_r",
+        #              "q_hip_flexion_l",
+        #              "q_lumbar_extension"]
+        # balljoint_idx = []
+        # for b in balljoint:
+        #     balljoint_idx.append(self.get_obs_idx(b)[0])
+        # i1 = self.get_obs_idx("q_hip_flexion_r")[0]
+        # i2 = self.get_obs_idx("dq_pelvis_tx")[0]
+
+        # maxlen = np.inf
+        # for i in range(10000):
+        #     for j in range(i+40,i+150):
+        #         dif = vectornorm(getstatedifference(self._traj_obs[i],self._traj_obs[j],balljoint_idx)[i1:i2])
+        #         if maxlen > dif:
+        #             maxlen =  dif
+        #             print(i)
+        #             print(j)
+        #             print(maxlen)
+
+        # import pdb;pdb.set_trace()
+
+
+        # GaitNet style reward
+        refstate = self._traj_obs[(self._randidx+self._step)%self._refsize]
+        # next_refstate = self._traj_obs[self._step+1]
+        
+        assert refstate.shape[0] == state.shape[0]
+
+        
+
+        balljoint = ["q_pelvis_tilt",
+                     "q_hip_flexion_r",
+                     "q_hip_flexion_l",
+                     "q_lumbar_extension"]
+        balljoint_idx = []
+        for b in balljoint:
+            balljoint_idx.append(self.get_obs_idx(b)[0])
+
+
+        diff = getstatedifference(state,refstate,balljoint_idx)
+        
+
+        i1 = self.get_obs_idx("q_hip_flexion_r")[0]
+        i2 = self.get_obs_idx("dq_pelvis_tx")[0]
+        i3 = self.get_obs_idx("dq_hip_flexion_r")[0]
+        i4 = self.get_obs_idx("p_talus_l")[0]
+        
+        
+        if self._rewardtype == 'deepmimic':
+            r_ee = np.exp(-40*vectornorm(diff[i4:-1]))
+            r_p = np.exp(-20*vectornorm(diff[i1:i2]))
+            r_v = np.exp(-5*vectornorm(diff[i3:i4]))
+            r_com = np.exp(-20*vectornorm(diff[1:i1-2]))
+
+            # r_com = np.exp(-10*vectornorm(np.concatenate([diff[:i1],diff[i2:i3]])))
+
+            w_p = 0.65
+            w_v = 0.1
+            w_ee = 0.45
+            w_com = 0.1
+            r = w_p * r_p + w_v * r_v + w_com * r_com + w_ee * r_ee
+        
+        
+        elif self._rewardtype == 'scadiver':
+            r_ee = np.exp(-40*vectornorm(diff[i4:-1]))
+            r_p = np.exp(-20*vectornorm(diff[i1:i2]))
+            r_v = np.exp(-10*vectornorm(diff[i3:i4]))
+            r_com = np.exp(-10*vectornorm(np.concatenate([diff[:i1],diff[i2:i3]])))
+
+            r = (0.1 + 0.9 * r_p) * (0.1 + 0.9 * r_v) * (0.1 + 0.9 * r_com) * (0.1 + 0.9 * r_ee)
+            
+        elif self._rewardtype == "control":
+            r_p = np.exp(-20*vectornorm(diff[i1:i2]))
+            r_root = np.exp(-10*vectornorm(diff[:i1]))
+            r_ee = np.exp(-40*vectornorm(diff[i4:]))
+
+            w_p = 0.75
+            w_root = 0.5
+            w_ee = 0.2
+            r = w_p * r_p + w_root * r_root + w_ee * r_ee
+        else:
+            raise NotImplementedError
+        
+        info = {}
+        info["r_p"] = r_p
+        info["r_v"] = r_v
+        info["r_com"] = r_com
+        info["r_ee"] = r_ee
+
+        return r, info
+    
+    def _compute_action(self, obs, action):
+        #['mot_ankle_angle_l', 'mot_ankle_angle_r', 'mot_hip_adduction_l', 'mot_hip_adduction_r', 
+        # 'mot_hip_flexion_l', 'mot_hip_flexion_r', 'mot_hip_rotation_l', 'mot_hip_rotation_r', 'mot_knee_angle_l', 
+        # 'mot_knee_angle_r', 'mot_lumbar_bend', 'mot_lumbar_ext', 'mot_lumbar_rot']"
+        if self._use_muscles is False:
+            pos_list = ['q_ankle_angle_l', 'q_ankle_angle_r', 'q_hip_adduction_l', 'q_hip_adduction_r', \
+            'q_hip_flexion_l', 'q_hip_flexion_r', 'q_hip_rotation_l', 'q_hip_rotation_r', 'q_knee_angle_l', \
+            'q_knee_angle_r', 'q_lumbar_bending', 'q_lumbar_extension', 'q_lumbar_rotation']
+            vel_list = ['dq_ankle_angle_l', 'dq_ankle_angle_r', 'dq_hip_adduction_l', 'dq_hip_adduction_r', \
+            'dq_hip_flexion_l', 'dq_hip_flexion_r', 'dq_hip_rotation_l', 'dq_hip_rotation_r', 'dq_knee_angle_l', \
+            'dq_knee_angle_r', 'dq_lumbar_bending', 'dq_lumbar_extension', 'dq_lumbar_rotation']
+            pos = self._get_from_obs(obs,pos_list)
+            vel = self._get_from_obs(obs,vel_list)
+            kp = 50.0 / 250
+            kv = 14.14 / 250
+            action = kp * (action - pos) - kv * vel
+        return super()._compute_action(obs, action)
+    
+
+def getstatedifference(state, ref, balljointidx):
+    diff = state - ref
+    for i in balljointidx:
+        q1 = quat_from_euler_xyz(torch.tensor([ref[i]]),torch.tensor([ref[i+1]]),torch.tensor([ref[i+2]]))
+        q2 = quat_from_euler_xyz(torch.tensor([state[i]]),torch.tensor([state[i+1]]),torch.tensor([state[i+2]]))
+        diff[i] = quat_diff_rad(q1,q2)[0]
+        diff[i+1] = 0
+        diff[i+2] = 0
+        # qdiff = quat_mul(quat_conjugate(q1),q2)
+        # roll, pitch, yaw = get_euler_xyz(qdiff)
+        # diff[i] = (roll + np.pi) % (2*np.pi) - np.pi
+        # diff[i+1] = (pitch + np.pi) % (2*np.pi) - np.pi
+        # diff[i+2] = (yaw + np.pi) % (2*np.pi) - np.pi
+    return diff
+
+def vectornorm(vec):
+    return np.inner(vec,vec) / np.size(vec,axis=0)

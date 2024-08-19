@@ -47,7 +47,7 @@ def experiment(env_id: str = None,
         core.learn(n_steps=n_steps_per_epoch, n_steps_per_fit=n_steps_per_fit, quiet=True, render=False)
 
         # evaluate
-        dataset = core.evaluate(n_episodes=n_eval_episodes)
+        dataset, dataset_info = core.evaluate(n_episodes=n_eval_episodes, get_env_info=True)
         R_mean = np.mean(compute_J(dataset))
         J_mean = np.mean(compute_J(dataset, gamma=gamma))
         L = np.mean(compute_episodes_length(dataset))
@@ -55,6 +55,16 @@ def experiment(env_id: str = None,
         sw.add_scalar("Eval_R-stochastic", R_mean, epoch)
         sw.add_scalar("Eval_J-stochastic", J_mean, epoch)
         sw.add_scalar("Eval_L-stochastic", L, epoch)
+
+        r_p = np.mean(dataset_info["r_p"])
+        r_v = np.mean(dataset_info["r_v"])
+        r_com = np.mean(dataset_info["r_com"])
+        r_ee = np.mean(dataset_info["r_ee"])
+        sw.add_scalar("Eval_R_P", r_p, epoch)
+        sw.add_scalar("Eval_R_V", r_v, epoch)
+        sw.add_scalar("Eval_R_COM", r_com, epoch)
+        sw.add_scalar("Eval_R_EE", r_ee, epoch)
+
         agent_saver.save(core.agent, R_mean)
 
     agent_saver.save_curr_best_agent()

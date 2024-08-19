@@ -140,6 +140,8 @@ class LocoEnv(MultiMuJoCo):
         self._random_start = random_start
         self._init_step_no = init_step_no
 
+        self._step = 0
+        self._randidx = 0
         self._use_absorbing_states = use_absorbing_states
 
     def load_trajectory(self, traj_params, warn=True):
@@ -156,7 +158,7 @@ class LocoEnv(MultiMuJoCo):
         if self.trajectories is not None:
             warnings.warn("New trajectories loaded, which overrides the old ones.", RuntimeWarning)
 
-        self.trajectories = Trajectory(keys=self.get_all_observation_keys(),
+        self.trajectories = Trajectory(keys=self.get_all_observation_keys()[:self.get_obs_idx('p_talus_l')[0]],
                                        low=self.info.observation_space.low,
                                        high=self.info.observation_space.high,
                                        joint_pos_idx=self.obs_helper.joint_pos_idx,
@@ -166,6 +168,15 @@ class LocoEnv(MultiMuJoCo):
                                        interpolate_remap_params=self._get_interpolate_remap_params(),
                                        warn=warn,
                                        **traj_params)
+        if '02-constsumanoid' in str(traj_params['traj_path']):
+            self._refidx = 400
+            self._refsize = 115
+        elif '05-ruhumanoid.npz' in str(traj_params['traj_path']):
+            self._refidx = 2432
+            self._refsize = 85
+        else:
+            NotImplementedError()
+        self.play_trajectory(n_episodes=1,n_steps_per_episode=self.trajectories.trajectory_length,render=False,save_data=True)
 
     def reward(self, state, action, next_state, absorbing):
         """
@@ -194,12 +205,17 @@ class LocoEnv(MultiMuJoCo):
         self._data = self._datas[self._current_model_idx]
         self.obs_helper = self.obs_helpers[self._current_model_idx]
 
+        if hasattr(self, '_traj_obs'):
+            self._randidx = np.random.randint(0, self._refsize, size=1)[0]
+            obs = self._traj_obs[self._randidx]
+
         self.setup(obs)
 
         if self._viewer is not None and self.more_than_one_env:
             self._viewer.load_new_model(self._model)
 
         self._obs = self._create_observation(self.obs_helper._build_obs(self._data))
+        self._step = 0
         return self._modify_observation(self._obs)
 
     def setup(self, obs):
@@ -240,6 +256,14 @@ class LocoEnv(MultiMuJoCo):
 
                 self.set_sim_state(sample)
 
+    
+    def step(self, action):
+        obs, reward, absorbing, info = super().step(action)
+        self._step = self._step + 1
+        if self._step >= 1000:
+            absorbing = True
+        return obs, reward, absorbing, info
+
     def is_absorbing(self, obs):
         """
         Checks if an observation is an absorbing state or not.
@@ -271,7 +295,7 @@ class LocoEnv(MultiMuJoCo):
         idx = self.obs_helper.obs_idx_map[key]
 
         # shift by 2 to account for deleted x and y
-        idx = [i-2 for i in idx]
+        # idx = [i-2 for i in idx]
 
         return idx
 
@@ -312,7 +336,7 @@ class LocoEnv(MultiMuJoCo):
             return deepcopy(self._dataset)
 
     def play_trajectory(self, n_episodes=None, n_steps_per_episode=None, render=True,
-                        record=False, recorder_params=None):
+                        record=False, recorder_params=None, save_data=False):
         """
         Plays a demo of the loaded trajectory by forcing the model
         positions to the ones in the trajectories at every step.
@@ -323,7 +347,7 @@ class LocoEnv(MultiMuJoCo):
             render (bool): If True, trajectory will be rendered.
             record (bool): If True, the rendered trajectory will be recorded.
             recorder_params (dict): Dictionary containing the recorder parameters.
-
+            save_data (bool) : whether to save trajectory
         """
 
         assert self.trajectories is not None
@@ -353,10 +377,17 @@ class LocoEnv(MultiMuJoCo):
             n_steps_per_episode = highest_int
         if n_episodes is None:
             n_episodes = highest_int
+        if save_data:
+            n_episodes = 1
+            data = []
         for i in range(n_episodes):
             for j in range(n_steps_per_episode):
 
                 self.set_sim_state(sample)
+
+                if save_data:
+                    cur_obs = self._create_observation(self.obs_helper._build_obs(self._data))
+                    data.append(cur_obs)
 
                 self._simulation_pre_step()
                 mujoco.mj_forward(self._model, self._data)
@@ -384,6 +415,9 @@ class LocoEnv(MultiMuJoCo):
         self.stop()
         if record:
             recorder.stop()
+        
+        if save_data:
+            self._traj_obs = np.stack(data,axis=0)[self._refidx:self._refidx+self._refsize]
 
     def play_trajectory_from_velocity(self, n_episodes=None, n_steps_per_episode=None, render=True,
                                       record=False, recorder_params=None):
@@ -485,7 +519,6 @@ class LocoEnv(MultiMuJoCo):
         """
 
         obs_spec = self.obs_helper.observation_spec
-        assert len(sample) == len(obs_spec)
 
         for key_name_ot, value in zip(obs_spec, sample):
             key, name, ot = key_name_ot
@@ -570,8 +603,8 @@ class LocoEnv(MultiMuJoCo):
 
         """
 
-        sim_low, sim_high = (self.info.observation_space.low[2:],
-                             self.info.observation_space.high[2:])
+        sim_low, sim_high = (self.info.observation_space.low,
+                             self.info.observation_space.high)
 
         if self._use_foot_forces:
             grf_low, grf_high = (-np.ones((self._get_grf_size(),)) * np.inf,
@@ -594,11 +627,11 @@ class LocoEnv(MultiMuJoCo):
         """
 
         if self._use_foot_forces:
-            obs = np.concatenate([obs[2:],
+            obs = np.concatenate([obs,
                                   self.mean_grf.mean / 1000.,
                                   ]).flatten()
         else:
-            obs = np.concatenate([obs[2:],
+            obs = np.concatenate([obs,
                                   ]).flatten()
 
         return obs
@@ -642,7 +675,7 @@ class LocoEnv(MultiMuJoCo):
         assert len(obs.shape) == 1
 
         # append x and y pos
-        obs = np.concatenate([[0.0, 0.0], obs])
+        # obs = np.concatenate([[0.0, 0.0], obs])
 
         obs_spec = self.obs_helper.observation_spec
         assert len(obs) >= len(obs_spec)
@@ -742,7 +775,7 @@ class LocoEnv(MultiMuJoCo):
         """
 
         # obs has removed x and y positions, add dummy entries
-        obs = np.concatenate([[0.0, 0.0], obs])
+        # obs = np.concatenate([[0.0, 0.0], obs])
         if type(keys) != list:
             assert type(keys) == str
             keys = list(keys)
@@ -772,7 +805,7 @@ class LocoEnv(MultiMuJoCo):
         for key in keys:
             entries.append(self.obs_helper.obs_idx_map[key])
 
-        return np.concatenate(entries) - 2
+        return np.concatenate(entries)
 
     def _len_qpos_qvel(self):
         """

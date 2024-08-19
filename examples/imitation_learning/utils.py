@@ -10,11 +10,13 @@ from imitation_lib.imitation import GAIL_TRPO, VAIL_TRPO
 from imitation_lib.utils import FullyConnectedNetwork, DiscriminatorNetwork, NormcInitializer, \
     Standardizer, GailDiscriminatorLoss, VariationalNet, VDBLoss
 
+from loco_mujoco.ppoagent import PPOagent
+
 
 def get_agent(env_id, mdp, use_cuda, sw, conf_path=None):
 
     if conf_path is None:
-        conf_path = 'confs.yaml'    # use default one
+        conf_path = 'examples/imitation_learning/confsppo.yaml'    # use default one
 
     with open(conf_path, 'r') as f:
         confs = yaml.safe_load(f)
@@ -33,9 +35,57 @@ def get_agent(env_id, mdp, use_cuda, sw, conf_path=None):
         agent = create_gail_agent(mdp, sw, use_cuda, **conf["algorithm_config"])
     elif conf["algorithm"] == "VAIL":
         agent = create_vail_agent(mdp, sw, use_cuda, **conf["algorithm_config"])
+    elif conf["algorithm"] == "PPO":
+        agent = create_ppo_agent(mdp,sw,use_cuda,**conf["algorithm_config"])
     else:
         raise ValueError(f"Invalid algorithm: {conf['algorithm']}")
 
+    return agent
+
+
+def create_ppo_agent(mdp, sw, use_cuda, last_policy_activation, std_0, learning_rate_actor, learning_rate_critic,
+                     n_epochs_policy=1,batch_size=256,eps_ppo=0.2,lam=0.95):
+    
+    mdp_info = deepcopy(mdp.info)
+
+    trpo_standardizer = Standardizer(use_cuda=use_cuda)
+
+    feature_dims = [512, 256]
+
+    policy_params = dict(network=FullyConnectedNetwork,
+                         input_shape=mdp_info.observation_space.shape,
+                         output_shape=mdp_info.action_space.shape,
+                         std_0=std_0,
+                         n_features=feature_dims,
+                         initializers=[NormcInitializer(1.0), NormcInitializer(1.0), NormcInitializer(0.001)],
+                         activations=['relu', 'relu', last_policy_activation],
+                         standardizer=trpo_standardizer,
+                         use_cuda=use_cuda)
+
+    actor_optimizer = {
+        'class': optim.Adam,
+        'params': {'lr': learning_rate_actor,
+                    'weight_decay': 0.0}
+    }
+    
+    critic_params = dict(network=FullyConnectedNetwork,
+                         optimizer={'class': optim.Adam,
+                                    'params': {'lr': learning_rate_critic,
+                                               'weight_decay': 0.0}},
+                         loss=F.mse_loss,
+                         batch_size=256,
+                         input_shape=mdp_info.observation_space.shape,
+                         activations=['relu', 'relu', 'identity'],
+                         standardizer=trpo_standardizer,
+                         squeeze_out=False,
+                         output_shape=(1,),
+                         initializers=[NormcInitializer(1.0), NormcInitializer(1.0), NormcInitializer(0.001)],
+                         n_features=[512, 256],
+                         use_cuda=use_cuda)
+    agent = PPOagent(mdp_info=mdp_info, policy_class=GaussianTorchPolicy, policy_params=policy_params,
+                     sw=sw,  actor_optimizer=actor_optimizer, critic_params=critic_params,
+                     n_epochs_policy=n_epochs_policy, batch_size=batch_size, eps_ppo=eps_ppo, lam=lam)
+    
     return agent
 
 
@@ -110,6 +160,7 @@ def create_gail_agent(mdp, sw, use_cuda, train_disc_n_th_epoch, learning_rate_di
 
     agent = GAIL_TRPO(mdp_info=mdp_info, policy_class=GaussianTorchPolicy, policy_params=policy_params, sw=sw,
                       discriminator_params=discriminator_params, critic_params=critic_params,
+                      env_reward_frac=1.0,
                       demonstrations=expert_data, **alg_params)
     return agent
 

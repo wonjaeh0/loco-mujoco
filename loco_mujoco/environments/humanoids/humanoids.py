@@ -759,7 +759,7 @@ class HumanoidMuscle(BaseHumanoid):
             assert kwargs["use_muscles"] is True, "Activating torque actuators in this environment not allowed. "
             del kwargs["use_muscles"]
 
-        super(HumanoidMuscle, self).__init__(use_muscles=True, **kwargs)
+        super(HumanoidMuscle, self).__init__(use_muscles=True, disable_arms=False, **kwargs)
 
     @staticmethod
     def generate(task="walk", dataset_type="real", **kwargs):

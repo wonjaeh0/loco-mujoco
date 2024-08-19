@@ -1,0 +1,41 @@
+HumanoidMuscle:
+  algorithm: "PPO"
+  algorithm_config:
+    std_0: 0.8
+    learning_rate_actor: 5.0e-5
+    learning_rate_critic: 5.0e-5
+    n_epochs_policy: 10
+    batch_size: 256
+    eps_ppo: 0.2
+    lam: 0.99
+    last_policy_activation: "identity"
+
+HumanoidTorque:
+  algorithm: "PPO"
+  algorithm_config:
+    std_0: 0.8
+    learning_rate_actor: 5.0e-5
+    learning_rate_critic: 5.0e-4
+    n_epochs_policy: 10
+    batch_size: 256
+    eps_ppo: 0.2
+    lam: 0.99
+    last_policy_activation: "identity"
+
+  
+HumanoidMuscleExo:
+  algorithm: "GAIL"
+  algorithm_config:
+    std_0: 0.8
+    disc_only_states: True
+    disc_use_next_states: False
+    train_disc_n_th_epoch: 3
+    disc_batch_size: 2048
+    learning_rate_critic: 5.0e-5
+    learning_rate_disc: 5.0e-6
+    policy_entr_coef: 1.0e-3
+    d_entr_coef: 1.0e-3
+    max_kl: 1.0e-2
+    n_epochs_cg: 25
+    use_noisy_targets: False
+    last_policy_activation: "identity"
